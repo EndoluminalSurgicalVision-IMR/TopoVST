@@ -1,0 +1,4 @@
+tmp_data/
+
+*.pyc
+*.log
