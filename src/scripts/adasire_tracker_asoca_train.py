@@ -39,7 +39,7 @@ class AdaSIRETrackerASOCATrainConfig(BaseConfig):
             "out_lumen": "tmp_data/samples/ASOCA_train_out_lumen.csv",
         },
         "val": {
-            "on_centerline": "tmp_data/samples/ASOCA_val_on_centerline.csv",
+            "on_centerline": "tmp_data/samples/ASOCA_val_on_centerline_raware_multidir.csv",
         }
     }
     window_level = 200

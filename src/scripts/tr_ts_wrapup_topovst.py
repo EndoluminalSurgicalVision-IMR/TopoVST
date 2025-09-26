@@ -18,9 +18,6 @@ from src.tester.wavefront_tracking_pipelines import AdaSireWaveFrontFixToSkeleto
 
 if __name__ == "__main__":
 
-    print("Test")
-    exit(0)
-
     torch.multiprocessing.set_start_method('spawn')
 
     parser = ArgumentParser()
@@ -34,16 +31,16 @@ if __name__ == "__main__":
     print("Use model steps: ", args.use_steps)
 
     # NOTE: To perform only testing part, just comment the following code
-    tr_config = AdaSIRETrackerAorta24TrainConfig()
+    tr_config = AdaSIRETrackerASOCATrainConfig()
     # NOTE: You can adjust here the training settings
     tr_config.device = args.device
     tr_config.trainer["devices"] = [ast.literal_eval(args.device[-1])]
     tr_config.trainer["max_epochs"] = 2
     tr_config.rand_scales = True
     tr_config.fix_scales = []
-    tr_config.pl_config["loss_params"]["pos_weight"] = 30.0  # Ablation term
+    tr_config.pl_config["loss_params"]["pos_weight"] = 10.0  # Ablation term
     tr_config.pl_config["direction_loss_alpha"] = 5.0  # d loss balance term
-    tr_config.base_radius = 30.0
+    tr_config.base_radius = 10.0
     tr_config.max_num_scales = 15
     tr_config.ckpt = None
 
@@ -55,10 +52,10 @@ if __name__ == "__main__":
     # Test
     save_dir = trainer.pl_trainer.logger.log_dir
     ckpt_dir = os.path.join(save_dir, "checkpoints")
-    ts_config = AdaSIRETrackerAorta24TestConfig()
+    ts_config = AdaSIRETrackerASOCATestConfig()
     ts_config.device = args.device
     # NOTE: You can adjust here the testing settings
-    ts_config.scales = [2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 10, 15, 20, 25, 30]
+    ts_config.scales = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     ts_config.infer_config["max_seeds"] = 1000  # Use only one seed
     ts_config.infer_config["max_front_len"] = 20  # Use a large max front len
     ts_config.infer_config["base_radius"] = tr_config.base_radius

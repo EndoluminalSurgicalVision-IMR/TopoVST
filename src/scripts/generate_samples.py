@@ -116,9 +116,9 @@ if __name__ == "__main__":
     torch.multiprocessing.set_start_method("spawn")
 
     # TODO: Prepare dataset
-    dataset = ""
+    dataset = "ASOCA"
     root_dir = ""
-    phase = ""  # "train", "test"
+    phase = ""  # "train", "val"
 
     # TODO: Prepare case_names
     case_names = []
