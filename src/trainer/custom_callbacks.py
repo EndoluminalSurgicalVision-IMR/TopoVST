@@ -3,6 +3,7 @@ from pytorch_lightning.callbacks import Callback
 from src.utils.load_transforms import LoadImageMaskRTCached
 
 
+# NOTE: Currently this module does not work well for LoadImageRTCached!
 class SharedMemoryCleanUpCallback(Callback):
 
     def on_exception(self, trainer, pl_module, exception):

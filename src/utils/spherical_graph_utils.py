@@ -1,9 +1,11 @@
 # Implements algorithms necessary for matching points on spheres.
 # Required by COACT Tracker
-from typing import List
+import copy
+from typing import List, Dict, Any
 
 import torch
 from monai.transforms import Transform
+import numpy as np
 import networkx as nx
 
 from src.utils.geometry import IcoSphere
@@ -55,6 +57,65 @@ class IcoSphereLocalMaxSolver(Transform):
                 bin_graph.nodes[node]["response"] = 0
 
         return bin_graph
+
+    def build_graph(self, response: List[float]) -> nx.Graph:
+        """ Build response graph on the sphere. """
+
+        ugraph = copy.deepcopy(self.graph)
+        for n in ugraph.nodes:
+            ugraph.nodes[n]["response"] = response[n]  # n is of type int
+            ugraph.nodes[n]["pos"] = self.sphere.cartverts[n, :].copy()
+
+        return ugraph
+
+    def get_conn_subgraph(self, graph: nx.Graph):
+        """ Get connected subgraphs from binary response graph. """
+
+        return graph.subgraph([n for n, data in graph.nodes(data=True)
+                               if data["response"] > 0])
+
+    def mean_dir_Cartesian(self, cartverts: np.ndarray) -> np.ndarray:
+        """ Compute mean direction on a sphere using cartesian coordinates of
+        directions on the sphere. """
+
+        mean_dir = np.mean(cartverts, axis=0).squeeze()
+        mean_dir /= np.linalg.norm(mean_dir)
+
+        return mean_dir
+
+    def direction_from_conn_regions(self, graph: nx.Graph) -> List[List]:
+        """ Get connected components of response graph and compute direction.
+        """
+
+        conn_regions = list(nx.connected_components(graph))
+        # conn_regions = self.conn_region_filter(conn_regions)
+
+        directions = []
+        for nodes in conn_regions:
+            pos = [graph.nodes[n]["pos"] for n in nodes]
+            mean_dir = self.mean_dir_Cartesian(np.array(pos).reshape(-1, 3))
+            directions.append(mean_dir.tolist())
+
+        return directions
+
+    def __call__(self, data: Dict[str, Any]):
+
+        pred: List | torch.Tensor = data.get("pred")
+        if torch.is_tensor(pred):
+            t = pred.clone().detach().to(self.device)
+        else:
+            t = torch.tensor(pred).to(self.device)
+
+        localmax = self.graph_localMax(t=t.clone())
+        subgraph = self.get_conn_subgraph(localmax)
+        directions = self.direction_from_conn_regions(subgraph)
+
+        data.update({
+            "bin_pred": [d["response"] for _, d in localmax.nodes(data=True)],
+            "directions": directions,
+        })
+
+        return data
 
 
 class LocalMaxEvaluator():
