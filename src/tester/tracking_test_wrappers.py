@@ -34,7 +34,13 @@ class SeedBasedTrackingWrapper():
 
         eval_loader = TestDataLoader()
         self.images, self.case_ids, self.preds = eval_loader(self.config)
-        self.generator = zip(self.images, self.case_ids, self.preds)
+        # Use a list (not a one-shot zip) so callers can iterate the case
+        # set more than once — e.g. tracking then a post-processing pass.
+        self.cases = list(zip(self.images, self.case_ids, self.preds))
+
+    @property
+    def generator(self):
+        return iter(self.cases)
 
     def load_seeds_file(self, case_id: str) -> Dict[str, Any]:
         """ Load seeds and affine matrix in a Dict. """
@@ -50,16 +56,26 @@ class SeedBasedTrackingWrapper():
                 json_name = os.path.join(self.seeds_folder, seed_file)
                 break
         if json_name is None:
-            raise FileNotFoundError("Seed file for %s not found!" % json_name)
+            raise FileNotFoundError(
+                "Seed file for case %s not found in %s!"
+                % (case_id, self.seeds_folder))
         with open(json_name, "r") as f:
             results: Dict[str, Any] = json.load(f)
 
         return results
 
+    def get_tracking_seeds(self, case_id: str) -> Dict[str, Any]:
+        """Return fixed seeds when required by the selected pipeline."""
+
+        if not getattr(self.pipeline, "requires_seed_file", True):
+            return {"seeds": []}
+
+        return self.load_seeds_file(case_id)
+
     def test_one_case(self, args):
 
         image_path, case_id, pred = args[0], args[1], args[2]
-        seeds_d = self.load_seeds_file(case_id)
+        seeds_d = self.get_tracking_seeds(case_id)
         kwargs: Dict[str, Any] = self.config.infer_config
         kwargs.update({
             "segment": pred,
@@ -77,7 +93,7 @@ class SeedBasedTrackingWrapper():
     def test(self) -> None:
 
         for image_path, case_id, pred in self.generator:
-            seeds_d = self.load_seeds_file(case_id)
+            seeds_d = self.get_tracking_seeds(case_id)
             kwargs: Dict[str, Any] = self.config.infer_config
             kwargs.update({
                 "segment": pred,

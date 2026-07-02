@@ -1,4 +1,5 @@
 import copy
+import math
 from typing import Dict, Any, Tuple, List
 
 import torch
@@ -56,7 +57,10 @@ class AdaSireSampleAndPredict(Transform):
                 sampled_data["sample"]["graph"], save_features=save_features)
             heatmap = res[0].tolist()
             radius = res[1].item()
-            if data.get("base_radius") is not None:
+            radius_param = data.get("radius_param", "logit")
+            if radius_param == "log":
+                radius = data["r_ref"] * math.exp(radius)
+            elif data.get("base_radius") is not None:
                 radius = F.sigmoid(torch.tensor(radius)).item()
                 radius = radius * data.get("base_radius")
             weights = res[2][0].tolist() if save_weights else None

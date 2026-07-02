@@ -9,7 +9,24 @@ import numpy as np
 
 
 # Node type that will be inserted into a queue during DFS or BFS.
+BIFURCATION = namedtuple(
+    "Bifurcation", ["parent_node", "step_size", "direction", "position"])
 ANCHOR = namedtuple("Anchor", ["node", "position", "radius"])
+
+
+def shortest_path_length_mm(graph: nx.Graph, s: int, t: int) -> float | None:
+    """Geometric length (mm) of the shortest s->t path in `graph`, summed from
+    consecutive node "pos" attributes. Returns None if s and t are in different
+    connected components."""
+
+    try:
+        path = nx.shortest_path(graph, source=s, target=t)
+    except nx.NetworkXNoPath:
+        return None
+    if len(path) < 2:
+        return 0.0
+    positions = np.array([graph.nodes[n]["pos"] for n in path])
+    return float(np.linalg.norm(np.diff(positions, axis=0), axis=1).sum())
 
 
 class TrackedCenterline(object):
@@ -81,10 +98,12 @@ class TrackedCenterline(object):
 
         return len(self.centerline_graph.nodes)
 
-    def post_process(self):
+    def post_process(self, min_cycle_length_mm: float = float("inf")):
         """
         Add missing edges between overlapping endpoints(degree=1) and isolated
-        nodes(degree=0).
+        nodes(degree=0). A stitching edge is rejected only if it would close a
+        cycle whose geometric length is below ``min_cycle_length_mm``; the
+        default (inf) preserves the legacy tree-only behavior.
         """
 
         new_edges = []
@@ -124,12 +143,11 @@ class TrackedCenterline(object):
                             (k, sub[np.argmin(sub_dists, axis=0, keepdims=False)]))
 
         new_graph = copy.deepcopy(graph)
-        for new_edge in new_edges:
-            new_graph.add_edge(new_edge[0], new_edge[1])
-            if len(nx.cycle_basis(new_graph, new_edge[0])) > 0:
-                new_graph.remove_edge(new_edge[0], new_edge[1])
-            if len(nx.cycle_basis(new_graph, new_edge[1])) > 0:
-                new_graph.remove_edge(new_edge[0], new_edge[1])
+        for s, t in new_edges:
+            existing_len = shortest_path_length_mm(new_graph, s, t)
+            if existing_len is not None and existing_len < min_cycle_length_mm:
+                continue  # would form a small cycle — skip
+            new_graph.add_edge(s, t)
 
         self.centerline_graph = new_graph
 

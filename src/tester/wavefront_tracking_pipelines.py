@@ -8,7 +8,6 @@ import SimpleITK as sitk
 import scipy.ndimage as ndimage
 from monai.transforms import Compose
 from skimage.morphology import skeletonize
-import networkx.algorithms.approximation as nx_approx
 
 from src.utils.geometry import transform_points
 from src.tester.tracker_inference_base import TrackerInferenceBase
@@ -26,7 +25,7 @@ from src.utils.graph_transforms import (
     BuildForGEMGCN,
     GetKHopUndirectedEdges,
 )
-from src.tester.tracked_centerline import ANCHOR
+from src.tester.tracked_centerline import ANCHOR, shortest_path_length_mm
 from src.tester.stopping_criterions import (
     MaxIterationsStoppingCriterion,
     AlreadyTrackedStoppingCriterion,
@@ -46,11 +45,17 @@ class WaveFrontTrackingPipeline(TrackerInferenceBase):
         log_dir(str): A file location to store tracking logs and results.
     """
 
+    requires_seed_file = True
+
     def __init__(self, config, log_dir):
 
         self.explore_fronts: List[ANCHOR] = []
         # Initialize base class attributes
         super().__init__(config, log_dir)
+        # Minimum geometric cycle length (mm) allowed during tracking. Default
+        # inf keeps legacy tree-only behavior; CoW configs override.
+        self.min_cycle_length_mm = getattr(
+            config, "min_cycle_length_mm", float("inf"))
 
     def _build_stopping_criteria(self, **kwds):
         """
@@ -128,16 +133,25 @@ class WaveFrontTrackingPipeline(TrackerInferenceBase):
         candidates: List[int],
     ):
         """
-        Add (possible) connections between wave-fronts.
+        Add (possible) connections between wave-fronts. Connects across
+        components freely; closes a cycle within an existing component only if
+        the resulting loop's geometric length exceeds
+        ``self.min_cycle_length_mm``.
         """
 
+        graph = self.centerline.centerline_graph_nx
         for t in candidates:
-            conn = nx_approx.node_connectivity(
-                self.centerline.centerline_graph_nx, s=node, t=t)
-            if conn == 0:  # Disconnected
+            existing_len = shortest_path_length_mm(graph, node, t)
+            if existing_len is None:  # Disconnected
                 new_node = self.update_centerline(pos, node, r=radius)
                 self.centerline.add_edge(new_node, t)
                 self.logger.warning(f"Adding edge between {(new_node, t)}.")
+            elif existing_len >= self.min_cycle_length_mm:
+                new_node = self.update_centerline(pos, node, r=radius)
+                self.centerline.add_edge(new_node, t)
+                self.logger.warning(
+                    f"Closing cycle of ~{existing_len:.1f}mm between "
+                    f"{(new_node, t)}.")
 
     def update_front(self, data: Dict[str, Any], iteration: int, **kwds):
         """ Expand current exploration fronts. Substitute exploration fronts
@@ -280,6 +294,8 @@ class WaveFrontFixSeeds(WaveFrontTrackingPipeline):
             },
             "scales": self.config.scales,
             "base_radius": kwds.get("base_radius", None),
+            "radius_param": kwds.get("radius_param", "logit"),
+            "r_ref": kwds.get("r_ref", None),
         }
         data = self.infer_transform(data)
 
@@ -287,7 +303,8 @@ class WaveFrontFixSeeds(WaveFrontTrackingPipeline):
             self.logger.warning(f"Use seed {seed}")
             seed_point = torch.tensor(seed).to(self.device)
             self.track_from_seed(data, seed_point, **kwds)
-        self.centerline.post_process()
+        self.centerline.post_process(
+            min_cycle_length_mm=self.min_cycle_length_mm)
         self.logger.warning("Finished.")
 
         self.write_centerline_graph(
@@ -300,6 +317,8 @@ class WaveFrontSkeletonSeeds(WaveFrontTrackingPipeline):
     Adapt the wave-front propagation tracking pipeline to fixed-seeds init
     scenario. Only run_tracking() and update_seeds() function is changed.
     """
+
+    requires_seed_file = False
 
     def update_seeds(self, segment: str, affine: torch.Tensor, **kwds):
         """ Update seeds following original SIRE paper. """
@@ -326,13 +345,17 @@ class WaveFrontSkeletonSeeds(WaveFrontTrackingPipeline):
         # Remove visited seeds from the pool using radius information
         else:
             new_seeds = []
+            if not self.seeds_pool:
+                self.logger.warning("0 SEEDs Remaining.")
+                return
             if self.counter >= kwds["max_seeds"]:
                 self.seeds_pool = []  # Clear after certain number of updates
                 self.logger.warning("0 SEEDs Remaining.")
                 return
             # NOTE: A new version of seed selection without for loop.
             r = self.centerline.centerline_r.to(self.device)  # (N, )
-            remain_seeds = torch.tensor(self.seeds_pool).to(self.device)
+            remain_seeds = torch.tensor(
+                self.seeds_pool, device=self.device).view(-1, 3)
             M = remain_seeds.unsqueeze(1)  # (M, 0, 3)
             N = current_track.unsqueeze(0)  # (0, N, 3)
             distMat = torch.linalg.norm(M - N, dim=-1, keepdims=False)
@@ -368,6 +391,8 @@ class WaveFrontSkeletonSeeds(WaveFrontTrackingPipeline):
             },
             "scales": self.config.scales,
             "base_radius": kwds.get("base_radius", None),
+            "radius_param": kwds.get("radius_param", "logit"),
+            "r_ref": kwds.get("r_ref", None),
         }
         data = self.infer_transform(data)
 
@@ -377,7 +402,8 @@ class WaveFrontSkeletonSeeds(WaveFrontTrackingPipeline):
             seed_point = torch.tensor(seed).to(self.device)
             self.track_from_seed(data, seed_point, **kwds)
             self.update_seeds(**kwds)
-        self.centerline.post_process()
+        self.centerline.post_process(
+            min_cycle_length_mm=self.min_cycle_length_mm)
         self.logger.warning("Finished.")
 
         self.write_centerline_graph(
@@ -430,7 +456,8 @@ class WaveFrontFixToSkeletonSeeds(WaveFrontTrackingPipeline):
                 self.logger.warning("0 SEEDs Remaining.")
                 return
             r = self.centerline.centerline_r.to(self.device)  # (N, )
-            remain_seeds = torch.tensor(self.seeds_pool).to(self.device)
+            remain_seeds = torch.tensor(
+                self.seeds_pool, device=self.device).view(-1, 3)
             if len(remain_seeds) <= 1:
                 new_seeds = remain_seeds
             else:
@@ -471,6 +498,8 @@ class WaveFrontFixToSkeletonSeeds(WaveFrontTrackingPipeline):
             },
             "scales": self.config.scales,
             "base_radius": kwds.get("base_radius", None),
+            "radius_param": kwds.get("radius_param", "logit"),
+            "r_ref": kwds.get("r_ref", None),
         }
         data = self.infer_transform(data)
 
@@ -480,7 +509,8 @@ class WaveFrontFixToSkeletonSeeds(WaveFrontTrackingPipeline):
             seed_point = torch.tensor(seed).to(self.device)
             self.track_from_seed(data, seed_point, **kwds)
             self.update_seeds(**kwds)
-        self.centerline.post_process()
+        self.centerline.post_process(
+            min_cycle_length_mm=self.min_cycle_length_mm)
         self.logger.warning("Finished.")
 
         self.write_centerline_graph(

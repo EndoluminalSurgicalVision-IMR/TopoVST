@@ -33,17 +33,21 @@ class PytorchLightningTrainWrapper():
 
         self.pl_module: LightningModule = config.pl_module(**config.pl_config)
 
+        run_id = getattr(config, "run_id", None)
         if config.ckpt is None:
-            logger = TensorBoardLogger(
-                save_dir=config.log_dir,
-                name=f"{config.task_name}_{self.config.dataset_name}",
-                version=datetime.now().strftime("%Y_%m_%d_%H_%M_%S"))
+            # Fresh run: timestamped version, suffixed with run_id to avoid
+            # same-second collisions between concurrent runs.
+            base_version = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+            version = f"{base_version}_{run_id}" if run_id else base_version
         else:
-            logger = TensorBoardLogger(
-                save_dir=config.log_dir,
-                name=f"{config.task_name}_{self.config.dataset_name}",
-                version=config.ckpt.split("/")[-3],
-            )
+            # Resume: reuse the original log directory verbatim (it already
+            # encodes the run_id).
+            version = config.ckpt.split("/")[-3]
+        logger = TensorBoardLogger(
+            save_dir=config.log_dir,
+            name=f"{config.task_name}_{self.config.dataset_name}",
+            version=version,
+        )
         modelckpt = ModelCheckpoint(every_n_train_steps=100, save_top_k=-1)
         cleanup = SharedMemoryCleanUpCallback()
         self.pl_trainer = Trainer(logger=logger, callbacks=[modelckpt, cleanup],
