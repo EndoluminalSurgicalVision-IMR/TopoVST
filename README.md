@@ -11,14 +11,17 @@ A brief overview of our work. We utilize multi-scale GNNs for vessel skeleton di
 ![](assets/Introduction_v4_01.png)
 
 ### Training and testing
+
 Before training TopoVST, you need to generate training samples. Run:
 ```bash
-python src/scripts/generate_samples.py
+python src/scripts/data/generate_samples.py
 ```
-or use the `run_scripts.sh` provided. NOTE that you need to specify path to your own dataset.
+NOTE that you need to specify path to your own dataset.
 
-Run:
+Training and testing are driven by CSV config files. Each row is one `run_id`
+that pins dataset, tracker, hyper-parameters, and checkpoint paths:
 ```bash
-python src/scripts/tr_ts_wrapup_topovst.py --device YOUR_DEVICE --use_steps CKPT_STEPS
+python src/scripts/train/run_train.py --config-csv src/scripts/configs/train_configs.csv --run-id my_run --device cuda:0
+python src/scripts/test/run_test.py  --config-csv src/scripts/configs/test_configs.csv  --run-id my_run --device cuda:0
 ```
-to first train then test TopoVST on the dataset.
+Example CSV configs are coming soon.
