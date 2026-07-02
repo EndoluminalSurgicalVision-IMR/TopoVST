@@ -2,34 +2,36 @@ import os
 import json
 from datetime import datetime
 
-import numpy as np
-
 from src.utils.config import BaseConfig
 from src.model.adasire.ada_sire_trackers import AdaSIREMultiTaskScaleFusionTracker
-from src.tester.wavefront_tracking_pipelines import AdaSireWaveFrontFixSeeds, AdaSireWaveFrontSkeletonSeeds
+from src.tester.wavefront_tracking_pipelines import AdaSireWaveFrontSkeletonSeeds
 from src.tester.tracking_test_wrappers import SeedBasedTrackingWrapper
 
 
-class AdaSIRETrackerAorta24TestConfig(BaseConfig):
+class AdaSIRETrackerCoWTestConfig(BaseConfig):
 
     device = ""  # Place-holder
 
-    dataset_name = "Aorta24"
-    splits = ""  # Train-Val-Test split file in nnUNet style
-    src_dir = ""  # User-defined
-    preds = ""  # Segmentation predictions
-    phase = "test"  # Which part of data you want to use
+    dataset_name = "CoW"
+    # nnUNet-style splits json with "train"/"val"/"test" lists of case IDs.
+    splits = ""  # User-defined
+    src_dir = ""
+    preds = ""  # Segmentation predictions directory
+    phase = "test"
 
-    # Seed configuration
-    seeds_folder = ""  # or None, if not using pre-generated seeds
+    seeds_folder = ""  # User-defined, should match the seeds generated for the test set by generate_seeds.py
 
-    # CT windowing configuration
     WINDOW_LEVEL = 200
-    WINDOW_WIDTH = 1200
+    WINDOW_WIDTH = 600
 
-    scales = []  # Use testing settings
+    scales = []
     npoints = 64
-    subdivisions = 3  # 642 points
+    subdivisions = 3
+
+    # Allow cycle closure for CoW (Circle of Willis loop perimeter ~50-100 mm).
+    # Cycles whose geometric length is below this threshold are still rejected
+    # to suppress spurious small loops from wavefront oscillations.
+    min_cycle_length_mm = 30.0
 
     pl_module = AdaSIREMultiTaskScaleFusionTracker
     ckpt_time = ""
@@ -39,8 +41,8 @@ class AdaSIRETrackerAorta24TestConfig(BaseConfig):
     infer_config = {
         "max_front_len": 20,
         "normalization": "sigmoid",
-        "max_seeds": 1000,
-        "base_radius": 30.0,  # Unit: mm
+        "max_seeds": 20,
+        "base_radius": 5.0,
         "stopping": {},
     }
 
@@ -64,7 +66,7 @@ class AdaSIRETrackerAorta24TestConfig(BaseConfig):
 
 if __name__ == "__main__":
 
-    config = AdaSIRETrackerAorta24TestConfig()
+    config = AdaSIRETrackerCoWTestConfig()
     save_location = config.get_save_location()
     if not os.path.exists(save_location):
         os.makedirs(save_location)

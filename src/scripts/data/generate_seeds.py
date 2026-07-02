@@ -113,11 +113,11 @@ if __name__ == "__main__":
 
     def get_imgPath(case_name: str) -> str:
 
-        return os.path.join("imagesTr", "%s_0000.nii.gz" % case_name)
+        return os.path.join("imagesTs", "%s_0000.nii.gz" % case_name)
 
     def get_maskPath(case_name: str) -> str:
 
-        return os.path.join("labelsTr", "%s_0000.nii.gz" % case_name)
+        return os.path.join("labelsTs", "%s.nii.gz" % case_name)
 
     def get_predPath(case_name: str) -> str:
 
@@ -142,7 +142,6 @@ if __name__ == "__main__":
         num_seeds = len(res["seeds"])
 
         directory = os.path.join(DST, dir_name)
-        if not os.path.exists(directory):
-            os.makedirs(directory)
+        os.makedirs(directory, exist_ok=True)
         with open(os.path.join(directory, f"{case_id}_seeds_{num_seeds}.json"), 'w') as f:
             json.dump(res, f)
