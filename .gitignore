@@ -1,4 +1,29 @@
 tmp_data/
+.vscode/
 
 *.pyc
 *.log
+
+# Claude's files
+specs/
+CLAUDE.md
+.claude/
+*.bak
+
+# Codex's files
+.agents/
+.codex/
+AGENTS.md
+
+# Machine-specific config tables and dataset config scripts
+src/scripts/configs/*.csv
+# src/scripts/dataset_configs/*.py
+
+# Files for statistical evaluation
+src/stats
+
+# Files with hard-coded absolute paths — webui
+webui/server/__main__.py
+webui/run_webui.sh
+webui/run_webui_parse.sh
+webui/README.md
