@@ -7,6 +7,17 @@ class BaseConfig(object):
     Base class for Config object.
     """
 
+    # Minimum geometric length (mm) of a cycle that may be closed during
+    # tracking. Default float("inf") disables cycle closure (tree-only),
+    # preserving legacy behavior for ASOCA / Aorta24. Anatomies with genuine
+    # loops (e.g. Circle of Willis) should override with a finite value.
+    min_cycle_length_mm: float = float("inf")
+
+    # Radius head parameterization. "logit" = legacy r_norm=clamp(r/base_radius)
+    # then logit. "log" = log(max(r, r_floor) / r_ref); requires r_ref.
+    radius_param: str = "logit"
+    r_ref: float = None
+
     def print_self(self) -> Dict[str, Any]:
         """
         Organize all class attributes as a python Dict.

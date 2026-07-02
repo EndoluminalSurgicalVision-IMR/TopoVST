@@ -8,6 +8,7 @@ from vtkmodules.util.numpy_support import vtk_to_numpy
 import fill_voids
 import torch
 import numpy as np
+import networkx as nx
 import SimpleITK as sitk
 from skimage.morphology import skeletonize
 
@@ -92,6 +93,146 @@ class LoadCenterlineModel(Transform):
                 valid_lines.append(point_ids)
             else:
                 invalid_lines.append(point_ids)
+
+        data.update({
+            "centerline": {
+                "points": points,
+                "radii": radii,
+                "valid_lines": valid_lines,
+                "invalid_lines": invalid_lines,
+            },
+        })
+        return data
+
+
+class LoadCenterlineGraph(Transform):
+    """ Monai-styled transform for loading a centerline that is encoded as a
+    graph (each VTP cell is a 2-point edge), with per-cell radius arrays.
+
+    Used by the CoW dataset, where vessel centerlines come as `vtkPolyData`
+    with 2-point line cells and three candidate radius arrays:
+    ``ce_radius``, ``mis_radius``, ``voreen_radius``. Branches (paths between
+    junctions and endpoints) are reconstructed so the downstream pipeline,
+    which expects ordered polylines, can consume them unchanged.
+    """
+
+    MINIMUM_LINE_LEN = 10
+
+    def __init__(self, radius_array: str = "mis_radius"):
+
+        super().__init__()
+        self.radius_array = radius_array
+
+    def __call__(self, data: Dict[str, Any]):
+
+        centerline_path: str = data.get("centerline")
+        if not centerline_path.endswith(".vtp"):
+            raise ValueError("LoadCenterlineGraph only supports .vtp files.")
+
+        reader = vtk.vtkXMLPolyDataReader()
+        reader.SetFileName(centerline_path)
+        reader.Update()
+        model: vtk.vtkPolyData = reader.GetOutput()
+
+        vtk_points: vtk.vtkPoints = model.GetPoints()
+        n_pts = vtk_points.GetNumberOfPoints()
+        points = np.array([
+            vtk_points.GetPoint(i) for i in range(n_pts)]).reshape(-1, 3)
+
+        cell_radii_vtk = model.GetCellData().GetArray(self.radius_array)
+        if cell_radii_vtk is None:
+            raise ValueError(
+                f"Cell array '{self.radius_array}' not found in {centerline_path}.")
+        cell_radii = vtk_to_numpy(cell_radii_vtk).reshape(-1)
+
+        # Each cell is a 2-point edge: (u, v).
+        edges = []
+        lines = model.GetLines()
+        lines.InitTraversal()
+        num_cells = lines.GetNumberOfCells()
+        for _ in range(num_cells):
+            cell = vtk.vtkIdList()
+            lines.GetNextCell(cell)
+            if cell.GetNumberOfIds() != 2:
+                raise ValueError(
+                    "LoadCenterlineGraph expects 2-point line cells; got "
+                    f"{cell.GetNumberOfIds()} in {centerline_path}.")
+            edges.append((cell.GetId(0), cell.GetId(1)))
+
+        # Convert per-cell radius into per-point radius (mean over incident
+        # edges; endpoints inherit their single incident edge value).
+        radii_sum = np.zeros((n_pts, ), dtype=np.float64)
+        radii_cnt = np.zeros((n_pts, ), dtype=np.int64)
+        for (u, v), r in zip(edges, cell_radii):
+            radii_sum[u] += r
+            radii_cnt[u] += 1
+            radii_sum[v] += r
+            radii_cnt[v] += 1
+        radii = np.where(radii_cnt > 0, radii_sum / np.maximum(radii_cnt, 1), 0.0)
+        radii = radii.reshape(-1, 1)
+
+        # Reconstruct ordered polylines (one per branch) from the edge graph.
+        graph = nx.Graph()
+        graph.add_nodes_from(range(n_pts))
+        graph.add_edges_from(edges)
+        degree = dict(graph.degree())
+        seen = set()
+        valid_lines, invalid_lines = [], []
+
+        def walk(start: int, neighbor: int):
+            path = [start, neighbor]
+            prev, cur = start, neighbor
+            while degree[cur] == 2:
+                nxt_candidates = [
+                    m for m in graph.neighbors(cur) if m != prev]
+                if not nxt_candidates:
+                    break
+                nxt = nxt_candidates[0]
+                if frozenset({cur, nxt}) in seen:
+                    break
+                seen.add(frozenset({cur, nxt}))
+                path.append(nxt)
+                prev, cur = cur, nxt
+            return path
+
+        # Walk from every non-degree-2 node (branches + endpoints).
+        branch_nodes = [n for n, d in degree.items() if d != 2]
+        for node in branch_nodes:
+            for nb in graph.neighbors(node):
+                edge = frozenset({node, nb})
+                if edge in seen:
+                    continue
+                seen.add(edge)
+                path = walk(node, nb)
+                target = valid_lines if len(path) >= self.MINIMUM_LINE_LEN \
+                    else invalid_lines
+                target.append(path)
+
+        # Any remaining unseen edges belong to pure cycles (no branch nodes).
+        for u, v in edges:
+            edge = frozenset({u, v})
+            if edge in seen:
+                continue
+            seen.add(edge)
+            # Walk the cycle starting at u in the direction of v.
+            path = [u, v]
+            prev, cur = u, v
+            while True:
+                nxt_candidates = [m for m in graph.neighbors(cur) if m != prev]
+                if not nxt_candidates:
+                    break
+                nxt = nxt_candidates[0]
+                edge_n = frozenset({cur, nxt})
+                if edge_n in seen:
+                    break
+                seen.add(edge_n)
+                path.append(nxt)
+                prev, cur = cur, nxt
+                if cur == u:
+                    break
+            target = valid_lines if len(path) >= self.MINIMUM_LINE_LEN \
+                else invalid_lines
+            target.append(path)
 
         data.update({
             "centerline": {

@@ -13,7 +13,12 @@ from monai.transforms import Transform, Compose
 from sklearn.metrics.pairwise import haversine_distances
 
 from src.utils.geometry import transform_points, nearestPointsIndices3D, cart2spher
-from src.utils.load_transforms import LoadCenterlineModel, LoadFilledMask, LoadSkeleton
+from src.utils.load_transforms import (
+    LoadCenterlineModel,
+    LoadCenterlineGraph,
+    LoadFilledMask,
+    LoadSkeleton,
+)
 
 
 def cl_model_multidir_by_intersect(
@@ -287,6 +292,19 @@ class DatasetSpecificTransform(Transform):
 
         super().__init__()
 
+    def CoW_centerline_correction(self, data: Dict[str, Any]):
+        """ Map CoW centerline coordinates into the mask's physical frame.
+
+        CoW VTPs are stored in RAS while the segmentation masks live in LPS,
+        so the x and y axes flip sign.
+        """
+
+        points: np.ndarray = data["centerline"]["points"].copy()
+        points[:, 0] *= -1
+        points[:, 1] *= -1
+        data["centerline"]["points"] = points
+        return data
+
     def ASOCA_centerline_correction(self, data: Dict[str, Any]):
         """ Perform centerline point coordinates correction for ASOCA dataset.
 
@@ -316,10 +334,12 @@ class DatasetSpecificTransform(Transform):
     def __call__(self, data: Dict[str, Any]):
 
         dataset_name = data.get("dataset")
-        if dataset_name not in ["ASOCA", ]:
+        if dataset_name not in ["ASOCA", "CoW", "Parse"]:
             return data
         if dataset_name == "ASOCA":
             data = self.ASOCA_centerline_correction(data)
+        elif dataset_name in ["CoW", "Parse"]:
+            data = self.CoW_centerline_correction(data)
         return data
 
 
@@ -631,6 +651,20 @@ class SampleCLModelMultiDirectionRadiusAware(SampleTransformBase):
 
         print(f"{len(valid_samples)} samples selected for {data['case_name']}")
         return valid_samples
+
+
+class SampleCLGraphMultiDirectionRadiusAware(SampleCLModelMultiDirectionRadiusAware):
+    """ Variant of SampleCLModelMultiDirectionRadiusAware that consumes
+    graph-style centerline VTPs (two-point line cells, per-cell radius).
+    Used for the CoW dataset. """
+
+    def __init__(self, radius_array: str = "mis_radius"):
+
+        self.load_transform = Compose([
+            LoadFilledMask(),
+            LoadCenterlineGraph(radius_array=radius_array),
+            DatasetSpecificTransform(),
+        ])
 
 
 class SampleSkeletonMultiDirectionRadiusAware(SampleTransformBase):

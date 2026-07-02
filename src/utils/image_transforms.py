@@ -123,13 +123,30 @@ class SampleIcoSphereMultiDir(SampleIcoSphere):
         if not augmentation:
             tangents = torch.tensor(data["tangents"])
             target = self._get_direction_label(tangents)
-            radius = torch.tensor(data["radius"])
-            # TEST: We transform the target to logit space to keep gradient
-            radius = radius / base_radius
-            radius = torch.log(radius / (1 - radius))
+            radius = torch.tensor(data["radius"], dtype=torch.float32)
         else:
-            radius = torch.tensor(-1.0)
+            # Out-of-lumen sample: train radius -> ~0 so the head doubles as
+            # a soft wall / leakage indicator. The CSV stores radius = 0.0
+            # for these rows; we transform to logit space below with a floor.
+            radius = torch.tensor(data.get("radius", 0.0) or 0.0,
+                                  dtype=torch.float32)
             target = torch.zeros((len(self.sphere.cartverts), ))
+
+        radius_param = data.get("radius_param", "logit")
+        if radius_param == "log":
+            # Log-space target: log(max(r, r_floor) / r_ref). r=0 (out-of-lumen)
+            # is floored to r_floor so the head retains a soft wall/leakage
+            # signal at log(r_floor / r_ref).
+            r_ref = data["r_ref"]
+            r_floor = data.get("r_floor", 0.01)  # mm
+            radius = torch.log(radius.clamp(min=r_floor) / r_ref)
+        else:
+            # Legacy logit parameterization at scale ``base_radius``; clamp
+            # into (eps, 1-eps) so r=0 maps to a large negative logit (the
+            # "no room here" sentinel) and r=base_radius stays finite.
+            eps = 1e-3
+            r_norm = (radius / base_radius).clamp(min=eps, max=1.0 - eps)
+            radius = torch.log(r_norm / (1.0 - r_norm))
 
         sampled_graph = self.get_features(image, affine, graph, center)
 
